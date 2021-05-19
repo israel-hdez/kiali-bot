@@ -1,17 +1,38 @@
-import { Application, Context } from 'probot';
+import { Application } from 'probot';
 import { GitHubAPI } from 'probot/lib/github';
 import { LoggerWithTarget } from 'probot/lib/wrap-logger';
 import { IssuesGetMilestoneResponse, PullsGetParams } from '@octokit/rest';
-import Webhooks from '@octokit/webhooks';
 import { Behavior } from '../types/generics';
 import { getCurrentSprintEndDate } from '../utils/SprintDates';
+
+interface PullRequestProps {
+  merged: boolean;
+  number: number;
+  user: {
+    login: string;
+  };
+  base: {
+    ref: string;
+  };
+}
 
 export default class MilestoneSetter extends Behavior {
   private static LOG_FIELDS = { behavior: 'MilestoneSetter' };
 
   public constructor(app: Application) {
     super(app);
-    app.on('pull_request.closed', this.prClosedHandler);
+    app.on(
+      'pull_request.closed',
+      async (context): Promise<void> => {
+        const pr = context.payload.pull_request;
+        context.log.debug(MilestoneSetter.LOG_FIELDS, `Pull #${pr.number} was just closed`);
+
+        if (MilestoneSetter.shouldAssignMilestone(context.log, pr)) {
+          const prParams = context.repo({ pull_number: pr.number });
+          this.assignMilestone(context.github, prParams);
+        }
+      },
+    );
     app.log.info('MilestoneSetter behavior is initialized');
   }
 
@@ -90,16 +111,6 @@ export default class MilestoneSetter extends Behavior {
       `Milestone ${version} was created with number ${createMilestoneResponse.data.number}`,
     );
     return createMilestoneResponse.data;
-  };
-
-  private prClosedHandler = async (context: Context<Webhooks.WebhookPayloadPullRequest>): Promise<void> => {
-    const pr = context.payload.pull_request;
-    context.log.debug(MilestoneSetter.LOG_FIELDS, `Pull #${pr.number} was just closed`);
-
-    if (MilestoneSetter.shouldAssignMilestone(context.log, pr)) {
-      const prParams = context.repo({ pull_number: pr.number });
-      this.assignMilestone(context.github, prParams);
-    }
   };
 
   private resolveBackendMilestone = async (
@@ -195,10 +206,7 @@ export default class MilestoneSetter extends Behavior {
     return null;
   };
 
-  private static shouldAssignMilestone = (
-    log: LoggerWithTarget,
-    pr: Webhooks.WebhookPayloadPullRequestPullRequest,
-  ): boolean => {
+  private static shouldAssignMilestone = (log: LoggerWithTarget, pr: PullRequestProps): boolean => {
     // Don't assign milestone if PR was not merged.
     if (!pr.merged) {
       log.info(

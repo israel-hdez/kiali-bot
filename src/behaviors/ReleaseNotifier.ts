@@ -1,6 +1,5 @@
 import * as Mailjet from 'node-mailjet';
-import { Application, Context } from 'probot';
-import Webhooks from '@octokit/webhooks';
+import { Application } from 'probot';
 import { Behavior } from '../types/generics';
 import { htmlNotification, plainTextNotification } from '../data/ReleaseNotificationMessages';
 
@@ -9,34 +8,35 @@ export default class ReleaseNotifier extends Behavior {
 
   public constructor(app: Application) {
     super(app);
-    app.on('release.published', this.releasePublishedHandler);
+    app.on(
+      'release.published',
+      async (context): Promise<void> => {
+        const logFields = { release_url: context.payload.release.url, ...ReleaseNotifier.LOG_FIELDS };
+
+        // Act only for:
+        // * release entries created in the back-end repository, since this is
+        //   the main place in GitHub for tagging the releases,
+        // * releases created by kiali-bot,
+        // * releases that are not drafts,
+        // * releases that are not pre-releases,
+        // * major and minor versions (for now, omit notification for patch versions)
+        const shouldAct =
+          context.payload.repository.name === process.env.BACKEND_REPO_NAME &&
+          context.payload.release.author.login === process.env.KIALI_BOT_USER &&
+          !context.payload.release.draft &&
+          !context.payload.release.prerelease &&
+          context.payload.release.tag_name.endsWith('.0');
+
+        if (!shouldAct) {
+          this.app.log.trace(logFields, 'Not doing action for the recently published release.');
+          return;
+        }
+
+        this.sendMailNotification(context.payload.release.tag_name);
+      },
+    );
     app.log.info('ReleaseNotifier behavior is initialized');
   }
-
-  private releasePublishedHandler = async (context: Context<Webhooks.WebhookPayloadRelease>): Promise<void> => {
-    const logFields = { release_url: context.payload.release.url, ...ReleaseNotifier.LOG_FIELDS };
-
-    // Act only for:
-    // * release entries created in the back-end repository, since this is
-    //   the main place in GitHub for tagging the releases,
-    // * releases created by kiali-bot,
-    // * releases that are not drafts,
-    // * releases that are not pre-releases,
-    // * major and minor versions (for now, omit notification for patch versions)
-    const shouldAct =
-      context.payload.repository.name === process.env.BACKEND_REPO_NAME &&
-      context.payload.release.author.login === process.env.KIALI_BOT_USER &&
-      !context.payload.release.draft &&
-      !context.payload.release.prerelease &&
-      context.payload.release.tag_name.endsWith('.0');
-
-    if (!shouldAct) {
-      this.app.log.trace(logFields, 'Not doing action for the recently published release.');
-      return;
-    }
-
-    this.sendMailNotification(context.payload.release.tag_name);
-  };
 
   private sendMailNotification = (tagName: string): void => {
     const logFields = { release_tag: tagName, ...ReleaseNotifier.LOG_FIELDS };

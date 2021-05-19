@@ -1,6 +1,5 @@
 import { Application, Context } from 'probot';
 import getConfig from 'probot-config';
-import Webhooks from '@octokit/webhooks';
 import { getProbotApp } from './globals';
 
 const DEFAULT_CONFIG: Configs = {
@@ -34,20 +33,22 @@ export class ConfigManager {
   private configs: ConfigsPerRepo;
 
   public constructor(app: Application) {
-    app.on('push', this.pushHandler);
+    app.on(
+      'push',
+      async (context): Promise<void> => {
+        // Only listen for changes in master branch.
+        if (context.payload.ref !== 'refs/heads/master') {
+          return;
+        }
+
+        // Invalidate configs.
+        context.log.info(`Invalidating configs due to push in master branch of ${context.repo().repo} repository`);
+        this.configs = {};
+      },
+    );
+
     this.configs = {};
   }
-
-  private pushHandler = async (context: Context<Webhooks.WebhookPayloadPush>): Promise<void> => {
-    // Only listen for changes in master branch.
-    if (context.payload.ref !== 'refs/heads/master') {
-      return;
-    }
-
-    // Invalidate configs.
-    context.log.info(`Invalidating configs due to push in master branch of ${context.repo().repo} repository`);
-    this.configs = {};
-  };
 
   public getConfigs = (context: Context): Promise<Configs> => {
     const { owner, repo } = context.repo();
